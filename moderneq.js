@@ -1,5 +1,5 @@
 (function ModernEQ() {
-  if (!window.Spicetify?.Platform?.EqualizerAPI || !Spicetify.Menu) {
+  if (!window.Spicetify?.Platform?.EqualizerAPI) {
     setTimeout(ModernEQ, 300);
     return;
   }
@@ -561,11 +561,37 @@
     panel = null;
   }
 
+  function injectMenuItem() {
+    const menus = document.querySelectorAll("ul[role=menu]");
+    menus.forEach((menu) => {
+      if (menu.querySelector(".meq-menu-item")) return;
+      const items = [...menu.querySelectorAll("[role=menuitem], [role=menuitemcheckbox]")];
+      const isProfileMenu = items.some((e) => /private session|log out/i.test(e.textContent));
+      if (!isProfileMenu) return;
+      const template = items.find((e) => !e.querySelector("svg")) || items[0];
+      const li = template.closest("li");
+      if (!li) return;
+      const clone = li.cloneNode(true);
+      clone.classList.add("meq-menu-item");
+      const btn = clone.querySelector("[role=menuitem], [role=menuitemcheckbox]") || clone;
+      btn.querySelectorAll("svg").forEach((s) => s.remove());
+      const label = [...btn.querySelectorAll("span, div")].find((e) => e.childElementCount === 0 && e.textContent.trim()) || btn;
+      label.textContent = "ModernEQ";
+      btn.onclick = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+        setTimeout(openPanel, 60);
+      };
+      menu.insertBefore(clone, menu.firstChild);
+    });
+  }
+
   const style = document.createElement("style");
   style.textContent = CSS;
   document.head.appendChild(style);
 
   loadState();
 
-  new Spicetify.Menu.Item("ModernEQ", false, openPanel, ICON).register();
+  new MutationObserver(injectMenuItem).observe(document.body, { childList: true, subtree: true });
 })();
