@@ -1,13 +1,5 @@
-// ModernEQ — a modern multi-band equalizer panel for the Spotify desktop client (Spicetify extension).
-//
-// Spotify's native DSP has exactly 6 filters (lowshelf@60, peaking@150/400/1000/2400, highshelf@15000)
-// clamped to ±12 dB. This extension exposes an 11-band interface spanning 32Hz–24KHz, grouped into
-// SUB / BASS / MID / TREBLE regions, and least-squares-fits the requested curve onto those 6 real
-// filters via Spicetify.Platform.EqualizerAPI. Both the target curve and the actually-applied response
-// are drawn so the mapping is always transparent.
-
 (function ModernEQ() {
-  if (!window.Spicetify?.Platform?.EqualizerAPI || !Spicetify.Topbar) {
+  if (!window.Spicetify?.Platform?.EqualizerAPI || !Spicetify.Menu) {
     setTimeout(ModernEQ, 300);
     return;
   }
@@ -15,12 +7,10 @@
   const EQ = Spicetify.Platform.EqualizerAPI;
   const FS = 48000;
   const GAIN_LIMIT = 12;
-  const VIEW_RANGE = 14; // dB drawing range so ±12 curves never clip the edge
+  const VIEW_RANGE = 14;
   const LS_STATE = "moderneq:state";
   const LS_PRESETS = "moderneq:presets";
 
-  // The 6 real filters in Spotify's audio engine. Q values are estimates for
-  // visualization/fitting only — the true Q lives in the native binary.
   const NATIVE = [
     { key: "audio.equalizer.low_shelf_gain_v2",      freq: 60,    type: "lowshelf",  Q: 0.707 },
     { key: "audio.equalizer.low_peak_gain_v2",       freq: 150,   type: "peaking",   Q: 0.98 },
@@ -56,8 +46,6 @@
     "Podcast":       [-3, -1, 1.5, 3, 3.5, 3, 2, 0.5, -1, -2, -3],
     "Lounge":        [2.5, 1.5, 0, -1, -0.5, 0.5, 1, 1.5, 2, 2.5, 2.5],
   };
-
-  // ---------------------------------------------------------------- DSP math
 
   function biquadCoeffs(type, f0, gainDb, Q) {
     const A = Math.pow(10, gainDb / 40);
@@ -105,13 +93,11 @@
     return db;
   }
 
-  // Unit-response basis: shape of each native filter per dB of gain, sampled at the UI bands.
   const BASIS = NATIVE.map((flt) => {
     const c = biquadCoeffs(flt.type, flt.freq, 6, flt.Q);
     return BANDS.map((f) => magDb(c, f) / 6);
   });
 
-  // Least-squares fit of the band targets onto 6 native gains (ridge-regularized normal equations).
   function fitToNative(target) {
     const n = NATIVE.length;
     const M = Array.from({ length: n }, () => new Array(n + 1).fill(0));
@@ -140,8 +126,6 @@
       return Math.max(-GAIN_LIMIT, Math.min(GAIN_LIMIT, Math.round(g * 10) / 10));
     });
   }
-
-  // ---------------------------------------------------------------- state
 
   let bands = new Array(BANDS.length).fill(0);
   let fitted = new Array(NATIVE.length).fill(0);
@@ -172,8 +156,6 @@
     try { return JSON.parse(localStorage.getItem(LS_PRESETS)) || []; } catch { return []; }
   }
 
-  // ------- low-latency gain writer: only changed filters, in parallel, no debounce.
-  // A single in-flight batch at a time; changes arriving mid-write coalesce into the next batch.
   let lastApplied = null;
   let writing = false;
   let dirty = false;
@@ -196,15 +178,13 @@
       } while (dirty);
     } catch (e) {
       console.error("[ModernEQ] failed to apply gains", e);
-      lastApplied = null; // force full rewrite next time
+      lastApplied = null;
     } finally {
       writing = false;
       if (dirty) pushGains();
     }
   }
 
-  // If the native gains were changed outside this panel (stock settings page),
-  // rebuild the band view from the actual native response.
   async function syncFromNative() {
     try {
       const filters = await EQ.getFilters();
@@ -224,8 +204,6 @@
       console.warn("[ModernEQ] syncFromNative failed", e);
     }
   }
-
-  // ---------------------------------------------------------------- UI
 
   const ICON = `<svg role="img" height="16" width="16" viewBox="0 0 16 16" fill="currentColor"><path d="M2 1a1 1 0 0 1 1 1v6.126a2.5 2.5 0 0 1 0 4.748V14a1 1 0 1 1-2 0v-1.126a2.5 2.5 0 0 1 0-4.748V2a1 1 0 0 1 1-1zm6 0a1 1 0 0 1 1 1v1.126a2.5 2.5 0 0 1 0 4.748V14a1 1 0 1 1-2 0V7.874a2.5 2.5 0 0 1 0-4.748V2a1 1 0 0 1 1-1zm6 0a1 1 0 0 1 1 1v6.126a2.5 2.5 0 0 1 0 4.748V14a1 1 0 1 1-2 0v-1.126a2.5 2.5 0 0 1 0-4.748V2a1 1 0 0 1 1-1z"/></svg>`;
 
@@ -278,8 +256,6 @@
     return ((i + 0.5) / BANDS.length) * w;
   }
 
-  // Warped frequency axis: band frequencies land exactly on their column centers,
-  // log-interpolated between them, so both curves line up with the sliders.
   function warpX(f, w) {
     const lf = Math.log10(f);
     const l0 = Math.log10(BANDS[0]), lN = Math.log10(BANDS[BANDS.length - 1]);
@@ -316,7 +292,6 @@
 
     const accent = getComputedStyle(document.documentElement).getPropertyValue("--spice-button").trim() || "#1ed760";
 
-    // region tints + separators (aligned to slider columns)
     REGIONS.forEach((r) => {
       const x0 = (r.from / BANDS.length) * w;
       const x1 = ((r.to + 1) / BANDS.length) * w;
@@ -332,7 +307,6 @@
     });
     ctx.setLineDash([]);
 
-    // dB grid
     ctx.strokeStyle = "rgba(255,255,255,.07)";
     [-12, -6, 6, 12].forEach((db) => {
       ctx.beginPath(); ctx.moveTo(0, dbToY(db, h)); ctx.lineTo(w, dbToY(db, h)); ctx.stroke();
@@ -347,7 +321,6 @@
       ctx.fillText(t, 6, dbToY(db, h));
     });
 
-    // achieved response: area fill to the 0 line, then the line itself
     const pts = [];
     for (let k = 0; k <= 220; k++) {
       const f = Math.pow(10, F_LO + (k / 220) * (F_HI - F_LO));
@@ -372,7 +345,6 @@
     pts.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
     ctx.stroke();
 
-    // target curve through the slider positions
     ctx.strokeStyle = accent;
     ctx.lineWidth = 2.5;
     ctx.setLineDash([7, 5]);
@@ -389,7 +361,6 @@
     ctx.stroke();
     ctx.setLineDash([]);
 
-    // native filter positions as faint dots on the achieved curve
     ctx.fillStyle = "rgba(255,255,255,.55)";
     NATIVE.forEach((n) => {
       const x = warpX(n.freq, w), y = dbToY(nativeResponse(fitted, n.freq), h);
@@ -434,7 +405,6 @@
       : "Manual";
   }
 
-  // Single funnel for any band change: refit, persist, redraw, write to native.
   function commit() {
     fitted = fitToNative(bands);
     saveState();
@@ -492,13 +462,11 @@
     document.body.appendChild(overlay);
     panel = overlay;
 
-    // toggle
     const sw = overlay.querySelector(".meq-switch");
     const setSw = (on) => { enabled = on; sw.classList.toggle("on", on); };
     const unsub = EQ.subscribeToEnabledState(setSw);
     sw.onclick = () => EQ.setEnabledState(!enabled);
 
-    // presets
     rebuildPresetSelect();
     const sel = overlay.querySelector(".meq-select");
     const delBtn = overlay.querySelector(".meq-delete");
@@ -522,7 +490,6 @@
       refreshDel();
     };
 
-    // save preset flow
     const saveRow = overlay.querySelector(".meq-save-row");
     const nameInput = overlay.querySelector(".meq-input");
     overlay.querySelector(".meq-save").onclick = () => { saveRow.classList.add("open"); nameInput.focus(); };
@@ -544,7 +511,6 @@
 
     overlay.querySelector(".meq-reset").onclick = () => { setBands(PRESETS.Flat, "Flat"); rebuildPresetSelect(); refreshDel(); };
 
-    // slider drag
     const stage = overlay.querySelector(".meq-stage");
     const markManual = () => { presetName = "Manual"; sel.value = "Manual"; refreshDel(); };
     overlay.querySelectorAll(".meq-col").forEach((col, i) => {
@@ -570,7 +536,6 @@
       };
     });
 
-    // close handlers
     const onKey = (e) => { if (e.key === "Escape") closePanel(); };
     overlay.onclick = (e) => { if (e.target === overlay) closePanel(); };
     overlay.querySelector(".meq-close").onclick = closePanel;
@@ -579,7 +544,6 @@
     ro.observe(stage);
     panel._cleanup = () => { document.removeEventListener("keydown", onKey); unsub?.(); ro.disconnect(); };
 
-    // initial paint after sync
     syncFromNative().then(() => {
       if (!panel) return;
       rebuildPresetSelect();
@@ -597,15 +561,11 @@
     panel = null;
   }
 
-  // ---------------------------------------------------------------- init
-
   const style = document.createElement("style");
   style.textContent = CSS;
   document.head.appendChild(style);
 
   loadState();
 
-  new Spicetify.Topbar.Button("ModernEQ", ICON, openPanel);
-
-  console.log("[ModernEQ] v2 loaded —", BANDS.length, "bands (32Hz–24KHz) mapped onto", NATIVE.length, "native filters");
+  new Spicetify.Menu.Item("ModernEQ", false, openPanel, ICON).register();
 })();
