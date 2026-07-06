@@ -1,7 +1,7 @@
 import { BANDS, BAND_LABELS, NATIVE, PRESETS, REGIONS, VIEW_RANGE, clampDb } from "./constants";
 import { fitToNative, nativeResponse } from "./dsp";
 import { PANEL_ICON } from "./icons";
-import { customPresets, deleteCustomPreset, pushGains, saveCustomPreset, saveState, state, syncFromNative } from "./store";
+import { customPresets, deleteCustomPreset, pushGains, saveCustomPreset, saveState, state, subscribeToGainChanges, syncFromNative } from "./store";
 
 export const CSS = `
 .meq-overlay { position: fixed; inset: 0; z-index: 9999; background: rgba(0,0,0,.6); backdrop-filter: blur(8px); display: flex; align-items: center; justify-content: center; }
@@ -354,7 +354,7 @@ export function openPanel(): void {
             return clampDb(((r.height / 2 - (clientY - r.top)) / (r.height / 2)) * VIEW_RANGE);
         };
         col.onpointerdown = (e) => {
-            col.setPointerCapture(e.pointerId);
+            try { col.setPointerCapture(e.pointerId); } catch {}
             col.classList.add("drag");
             state.bands[i] = fromY(e.clientY);
             markManual();
@@ -391,9 +391,16 @@ export function openPanel(): void {
     document.addEventListener("keydown", onKey);
     const ro = new ResizeObserver(() => drawCurve());
     ro.observe(stage);
+    const unsubGains = subscribeToGainChanges(() => {
+        rebuildPresetSelect();
+        refreshDel();
+        drawCurve();
+        updateNativeReadout();
+    });
     overlay._cleanup = () => {
         document.removeEventListener("keydown", onKey);
         unsub?.();
+        unsubGains();
         ro.disconnect();
     };
 

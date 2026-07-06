@@ -11,6 +11,9 @@ interface EqualizerAPI {
     setEnabledState: (enabled: boolean) => void;
     subscribeToEnabledState: (callback: (enabled: boolean) => void) => () => void;
     isSupported: () => boolean;
+    prefs: {
+        sub: (arg: { key: string }, callback: (value: unknown) => void) => { cancel: () => void };
+    };
 }
 
 declare const Spicetify: {

@@ -50,6 +50,19 @@ let lastApplied: number[] | null = null;
 let writing = false;
 let dirty = false;
 
+function mirrorToStockUI(gains: number[]): void {
+    const inputs = document.querySelectorAll<HTMLInputElement>(".x-settings-equalizerPanelInput");
+    if (inputs.length !== NATIVE.length) return;
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+    if (!setter) return;
+    inputs.forEach((input, i) => {
+        if (Math.abs(parseFloat(input.value) - gains[i]) < 0.05) return;
+        setter.call(input, String(gains[i]));
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+        input.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+}
+
 export async function pushGains(): Promise<void> {
     if (writing) {
         dirty = true;
@@ -68,6 +81,7 @@ export async function pushGains(): Promise<void> {
             }
             lastApplied = target;
             if (writes.length) await Promise.all(writes);
+            mirrorToStockUI(target);
         } while (dirty);
     } catch (e) {
         console.error("[ModernEQ] failed to apply gains", e);
@@ -78,7 +92,7 @@ export async function pushGains(): Promise<void> {
     }
 }
 
-export async function syncFromNative(): Promise<void> {
+export async function syncFromNative(): Promise<boolean> {
     try {
         const filters = await Spicetify.Platform.EqualizerAPI.getFilters();
         const current = NATIVE.map((n) => {
@@ -93,7 +107,27 @@ export async function syncFromNative(): Promise<void> {
             saveState();
         }
         lastApplied = [...current];
+        return drift;
     } catch (e) {
         console.warn("[ModernEQ] syncFromNative failed", e);
+        return false;
     }
+}
+
+export function subscribeToGainChanges(onExternalChange: () => void): () => void {
+    let debounce: ReturnType<typeof setTimeout> | undefined;
+    const subs = NATIVE.map((n) =>
+        Spicetify.Platform.EqualizerAPI.prefs.sub({ key: n.key }, () => {
+            clearTimeout(debounce);
+            debounce = setTimeout(async () => {
+                if (writing) return;
+                const drifted = await syncFromNative();
+                if (drifted) onExternalChange();
+            }, 150);
+        })
+    );
+    return () => {
+        clearTimeout(debounce);
+        subs.forEach((s) => s?.cancel?.());
+    };
 }
