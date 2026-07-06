@@ -6,7 +6,7 @@
   "version": "1.0.0",
   "main": "loader/MEQ-loader.js",
   "readme": "README.md",
-  "license": "MIT",
+  "license": "MEQ Source-Available License v1.0",
   "repository": "https://github.com/7xeh/SpotifyModernEQ",
   "spicetify": {
     "minVersion": "2.0.0"

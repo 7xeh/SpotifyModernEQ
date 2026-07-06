@@ -3,7 +3,7 @@
 A modern multi-band equalizer for the Spotify desktop client on Spicetify — SUB / BASS / MID / TREBLE regions, draggable curve, presets, and live response visualization.
 
 ![Spicetify](https://img.shields.io/badge/Spicetify-Extension-1DB954?style=flat-square&logo=spotify&logoColor=white)
-![License](https://img.shields.io/badge/License-MIT-blue?style=flat-square)
+![License](https://img.shields.io/badge/License-Source--Available-blue?style=flat-square)
 
 ## Why
 
@@ -57,4 +57,6 @@ Spotify's audio engine has exactly 6 filters compiled into the native binary —
 
 ## License
 
-MIT
+MEQ Source-Available License v1.0 — see [LICENSE](LICENSE).
+
+You may read the source, fork for personal use, and submit pull requests. Redistribution, republishing (including to the Spicetify Marketplace), and commercial use require written permission.
