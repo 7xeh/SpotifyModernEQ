@@ -1,0 +1,246 @@
+(async function() {
+    const API_HOST = "7xeh.dev";
+    const EXTENSION_BASE_URL = "https://7xeh.dev/apps/moderneq/releases";
+    const VERSION_API_URL = `https://${API_HOST}/apps/moderneq/api/version.php`;
+    const GITHUB_REPO = '7xeh/SpotifyModernEQ';
+    const GITHUB_LATEST_RELEASE_API = `https://api.github.com/repos/${GITHUB_REPO}/releases/latest`;
+    const STORAGE_PREFIX = 'moderneq:';
+    const DEBUG_MODE = localStorage.getItem(STORAGE_PREFIX + 'debug-mode') === 'true';
+
+    const log = {
+        debug: (...args) => DEBUG_MODE && console.log('[MEQ-Loader]', ...args),
+        info: (...args) => console.log('[MEQ-Loader]', ...args),
+        warn: (...args) => console.warn('[MEQ-Loader]', ...args),
+        error: (...args) => console.error('[MEQ-Loader]', ...args)
+    };
+
+    const storageGet = (key) => localStorage.getItem(STORAGE_PREFIX + key);
+    const storageSet = (key, val) => localStorage.setItem(STORAGE_PREFIX + key, val);
+    const appendCacheBust = (url) => `${url}${url.includes('?') ? '&' : '?'}_=${Date.now()}`;
+
+    const normalizeVersion = (value) => String(value || '').trim().replace(/^v/i, '');
+
+    const computeSHA256 = async (text) => {
+        try {
+            const data = new TextEncoder().encode(text);
+            const buffer = await crypto.subtle.digest('SHA-256', data);
+            return Array.from(new Uint8Array(buffer))
+                .map(b => b.toString(16).padStart(2, '0'))
+                .join('');
+        } catch (e) {
+            log.warn('SHA-256 computation unavailable:', e);
+            return null;
+        }
+    };
+
+    const waitForSpicetify = () => {
+        return new Promise((resolve, reject) => {
+            const check = () => {
+                if (
+                    typeof Spicetify !== 'undefined' &&
+                    Spicetify.Platform &&
+                    Spicetify.Player
+                ) {
+                    log.debug('Spicetify is ready');
+                    resolve();
+                    return true;
+                }
+                return false;
+            };
+
+            if (check()) return;
+
+            const interval = setInterval(() => {
+                if (check()) clearInterval(interval);
+            }, 100);
+
+            setTimeout(() => {
+                clearInterval(interval);
+                reject(new Error('Spicetify not found or not ready after 30 seconds'));
+            }, 30000);
+        });
+    };
+
+    const getVersionInfoFromPrimaryApi = async () => {
+        const response = await fetch(appendCacheBust(`${VERSION_API_URL}?action=version`));
+        if (!response.ok) throw new Error(`Primary API status ${response.status}`);
+        const data = await response.json();
+        const version = normalizeVersion(data.version);
+        if (!version) throw new Error('Primary API did not return a valid version');
+
+        return {
+            version,
+            hash: data.hash || data.sha256 || data.checksum || null,
+            downloadUrl: data.download_url || ''
+        };
+    };
+
+    const getVersionInfoFromGitHub = async () => {
+        const response = await fetch(appendCacheBust(GITHUB_LATEST_RELEASE_API), {
+            headers: { 'Accept': 'application/vnd.github.v3+json' }
+        });
+        if (!response.ok) throw new Error(`GitHub API status ${response.status}`);
+
+        const release = await response.json();
+        const version = normalizeVersion(release.tag_name);
+        if (!version) throw new Error('GitHub API did not return a valid release tag');
+
+        const jsAsset = Array.isArray(release.assets)
+            ? release.assets.find(asset => typeof asset?.name === 'string' && asset.name.endsWith('.js'))
+            : null;
+        const hash = jsAsset?.digest ? String(jsAsset.digest).replace(/^sha256:/i, '') : null;
+
+        return {
+            version,
+            hash,
+            downloadUrl: jsAsset?.browser_download_url || ''
+        };
+    };
+
+    const getVersionInfo = async () => {
+        try {
+            return await getVersionInfoFromPrimaryApi();
+        } catch (primaryError) {
+            log.warn('Primary version API unavailable, falling back to GitHub:', primaryError);
+            return await getVersionInfoFromGitHub();
+        }
+    };
+
+    const loadExtension = async (version, preferredDownloadUrl = '', expectedHash = null) => {
+        const candidates = [
+            preferredDownloadUrl,
+            `${EXTENSION_BASE_URL}/versions/v${version}/modern-eq.js`,
+            `${EXTENSION_BASE_URL}/latest/modern-eq.js`,
+        ].filter(Boolean);
+
+        let response = null;
+        let resolvedUrl = '';
+        let lastFetchError = null;
+
+        for (const baseUrl of [...new Set(candidates)]) {
+            const url = appendCacheBust(baseUrl);
+            try {
+                const currentResponse = await fetch(url);
+                if (!currentResponse.ok) {
+                    throw new Error(`HTTP ${currentResponse.status}`);
+                }
+
+                response = currentResponse;
+                resolvedUrl = baseUrl;
+                break;
+            } catch (e) {
+                lastFetchError = e;
+                log.debug(`Failed loader source ${baseUrl}:`, e);
+            }
+        }
+
+        if (!response) {
+            throw new Error(`Failed to load extension from all sources: ${lastFetchError?.message || 'Unknown error'}`);
+        }
+
+        log.debug('Extension loaded from source:', resolvedUrl);
+
+        const code = await response.text();
+        const contentHash = await computeSHA256(code);
+
+        if (expectedHash && contentHash && expectedHash !== contentHash) {
+            throw new Error(`Integrity check failed: expected ${expectedHash.substring(0, 12)}, got ${contentHash.substring(0, 12)}`);
+        }
+
+        if (contentHash) storageSet('content-hash', contentHash);
+        storageSet('loaded-version', version);
+
+        window._modern_eq_metadata = {
+            LoadedVersion: version,
+            LoadedAt: Date.now(),
+            IsLoader: true,
+            ContentHash: contentHash,
+            utils: { log }
+        };
+
+        const script = document.createElement('script');
+        script.textContent = code;
+        document.head.appendChild(script);
+        script.remove();
+
+        const hashTag = contentHash ? ` [${contentHash.substring(0, 12)}]` : '';
+        log.info(`Loaded v${version}${hashTag}`);
+    };
+
+    const showError = (message) => {
+        const safeMessage = String(message || 'Unknown error')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+
+        const waitForModal = setInterval(() => {
+            if (typeof Spicetify !== 'undefined' && Spicetify.PopupModal) {
+                clearInterval(waitForModal);
+                Spicetify.PopupModal.display({
+                    title: "ModernEQ - Error",
+                    content: (() => {
+                        const div = document.createElement('div');
+                        div.innerHTML = `
+                            <div style="text-align: center; padding: 16px 0;">
+                                <h3 style="margin: 0 0 12px; font-size: 1.2rem; font-weight: 600;">
+                                    Failed to load extension
+                                </h3>
+                                <p style="margin: 0 0 16px; opacity: 0.7;">
+                                    ${safeMessage}
+                                </p>
+                                <p style="margin: 0 0 8px;">
+                                    Please check your network connection and try restarting Spotify.
+                                </p>
+                                <p style="margin: 16px 0 0; font-size: 0.9rem; opacity: 0.7;">
+                                    Need help? Visit
+                                    <a href="https://github.com/7xeh/SpotifyModernEQ/issues" style="text-decoration: underline;">GitHub Issues</a>
+                                </p>
+                            </div>
+                        `;
+                        return div;
+                    })(),
+                    isLarge: false
+                });
+            }
+        }, 100);
+
+        setTimeout(() => clearInterval(waitForModal), 10000);
+    };
+
+    const load = async (retries = 3) => {
+        try {
+            await waitForSpicetify();
+        } catch (err) {
+            log.error('Required dependency unavailable:', err);
+            showError('Spicetify is not available. Please fully restart Spotify and try again.');
+            return;
+        }
+
+        log.info('Loading ModernEQ...');
+
+        let lastError;
+
+        for (let i = 0; i < retries; i++) {
+            try {
+                const info = await getVersionInfo();
+                await loadExtension(info.version, info.downloadUrl || '', info.hash);
+                return;
+            } catch (err) {
+                lastError = err;
+                log.warn(`Load attempt ${i + 1} failed:`, err);
+
+                if (i < retries - 1) {
+                    const delay = 2000 * Math.pow(1.5, i);
+                    await new Promise(r => setTimeout(r, delay));
+                }
+            }
+        }
+
+        log.error('Failed to load after all retries:', lastError);
+        showError(lastError?.message || 'Unknown error');
+    };
+
+    load();
+})();
