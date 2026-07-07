@@ -27,6 +27,8 @@ export const CSS = `
 .meq-cols { position: absolute; inset: 0; display: flex; }
 .meq-col { flex: 1; position: relative; cursor: ns-resize; touch-action: none; }
 .meq-col:hover { background: rgba(255,255,255,.03); }
+.meq-col:focus-visible { outline: 2px solid var(--spice-button, #1ed760); outline-offset: -2px; border-radius: 8px; }
+.meq-col:focus-visible .meq-val { opacity: 1; }
 .meq-thumb { position: absolute; left: 50%; width: 15px; height: 15px; border-radius: 50%; background: #fff; border: 3px solid var(--spice-button, #1ed760); transform: translate(-50%, -50%); pointer-events: none; box-shadow: 0 0 10px rgba(30,215,96,.45), 0 2px 6px rgba(0,0,0,.5); transition: box-shadow .12s; }
 .meq-col.drag .meq-thumb { box-shadow: 0 0 18px rgba(30,215,96,.8), 0 2px 6px rgba(0,0,0,.5); }
 .meq-val { position: absolute; left: 50%; transform: translateX(-50%); top: 8px; font-size: 11px; font-weight: 800; opacity: 0; transition: opacity .12s; pointer-events: none; color: var(--spice-button, #1ed760); text-shadow: 0 1px 4px rgba(0,0,0,.8); }
@@ -178,6 +180,8 @@ function positionThumbs(): void {
         (col.querySelector(".meq-thumb") as HTMLElement).style.top = dbToY(state.bands[i], h) + "px";
         (col.querySelector(".meq-val") as HTMLElement).textContent =
             (state.bands[i] > 0 ? "+" : "") + state.bands[i].toFixed(1);
+        col.setAttribute("aria-valuenow", String(state.bands[i]));
+        col.setAttribute("aria-valuetext", `${state.bands[i].toFixed(1)}dB`);
     });
 }
 
@@ -224,6 +228,9 @@ function commit(): void {
     saveState();
     drawCurve();
     updateNativeReadout();
+    if (!state.enabled) {
+        try { Spicetify.Platform.EqualizerAPI.setEnabledState(true); } catch {}
+    }
     pushGains();
 }
 
@@ -263,7 +270,7 @@ export function openPanel(): void {
         <div class="meq-regions">${regionHeader}</div>
         <div class="meq-stage">
           <canvas class="meq-canvas"></canvas>
-          <div class="meq-cols">${BANDS.map(() => `<div class="meq-col"><span class="meq-val"></span><div class="meq-thumb"></div></div>`).join("")}</div>
+          <div class="meq-cols">${BAND_LABELS.map((l) => `<div class="meq-col" tabindex="0" role="slider" aria-orientation="vertical" aria-valuemin="-12" aria-valuemax="12" aria-label="${l}Hz gain"><span class="meq-val"></span><div class="meq-thumb"></div></div>`).join("")}</div>
         </div>
         <div class="meq-labels">${BAND_LABELS.map((l) => `<span>${l}Hz</span>`).join("")}</div>
         <div class="meq-legend">
@@ -376,6 +383,24 @@ export function openPanel(): void {
         col.onwheel = (e) => {
             e.preventDefault();
             state.bands[i] = clampDb(state.bands[i] + (e.deltaY < 0 ? 0.5 : -0.5));
+            markManual();
+            commit();
+        };
+        col.onkeydown = (e) => {
+            let delta = 0;
+            if (e.key === "ArrowUp") delta = 0.5;
+            else if (e.key === "ArrowDown") delta = -0.5;
+            else if (e.key === "PageUp") delta = 2;
+            else if (e.key === "PageDown") delta = -2;
+            else if (e.key === "0") {
+                e.preventDefault();
+                state.bands[i] = 0;
+                markManual();
+                commit();
+                return;
+            } else return;
+            e.preventDefault();
+            state.bands[i] = clampDb(state.bands[i] + delta);
             markManual();
             commit();
         };

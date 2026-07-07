@@ -13,12 +13,19 @@ export const state = {
     enabled: false,
 };
 
+function sanitizeBands(raw: unknown): number[] | null {
+    if (!Array.isArray(raw) || raw.length !== BANDS.length) return null;
+    const bands = raw.map((v) => clampDb(Number(v)));
+    return bands.every((v) => Number.isFinite(v)) ? bands : null;
+}
+
 export function loadState(): void {
     try {
         const s = JSON.parse(localStorage.getItem(LS_STATE) || "null");
-        if (Array.isArray(s?.bands) && s.bands.length === BANDS.length) {
-            state.bands = s.bands.map(Number);
-            state.presetName = s.preset || "Manual";
+        const bands = sanitizeBands(s?.bands);
+        if (bands) {
+            state.bands = bands;
+            state.presetName = typeof s.preset === "string" ? s.preset : "Manual";
         }
     } catch {}
     state.fitted = fitToNative(state.bands);
@@ -30,7 +37,16 @@ export function saveState(): void {
 
 export function customPresets(): CustomPreset[] {
     try {
-        return JSON.parse(localStorage.getItem(LS_PRESETS) || "null") || [];
+        const raw = JSON.parse(localStorage.getItem(LS_PRESETS) || "null");
+        if (!Array.isArray(raw)) return [];
+        return raw
+            .map((p) => {
+                const bands = sanitizeBands(p?.bands);
+                return typeof p?.name === "string" && p.name.trim() && bands
+                    ? { name: p.name.slice(0, 32), bands }
+                    : null;
+            })
+            .filter((p): p is CustomPreset => p !== null);
     } catch {
         return [];
     }
@@ -116,18 +132,25 @@ export async function syncFromNative(): Promise<boolean> {
 
 export function subscribeToGainChanges(onExternalChange: () => void): () => void {
     let debounce: ReturnType<typeof setTimeout> | undefined;
-    const subs = NATIVE.map((n) =>
-        Spicetify.Platform.EqualizerAPI.prefs.sub({ key: n.key }, () => {
-            clearTimeout(debounce);
-            debounce = setTimeout(async () => {
-                if (writing) return;
-                const drifted = await syncFromNative();
-                if (drifted) onExternalChange();
-            }, 150);
-        })
-    );
+    let subs: { cancel: () => void }[] = [];
+    try {
+        subs = NATIVE.map((n) =>
+            Spicetify.Platform.EqualizerAPI.prefs.sub({ key: n.key }, () => {
+                clearTimeout(debounce);
+                debounce = setTimeout(async () => {
+                    if (writing) return;
+                    const drifted = await syncFromNative();
+                    if (drifted) onExternalChange();
+                }, 150);
+            })
+        );
+    } catch (e) {
+        console.warn("[ModernEQ] gain subscription unavailable", e);
+    }
     return () => {
         clearTimeout(debounce);
-        subs.forEach((s) => s?.cancel?.());
+        subs.forEach((s) => {
+            try { s?.cancel?.(); } catch {}
+        });
     };
 }

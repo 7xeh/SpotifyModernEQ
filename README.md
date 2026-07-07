@@ -51,6 +51,13 @@ Run `installer/install-spicetify-MEQ.cmd` after building — it installs Spiceti
 | `npm run deploy` | Build, copy to the Spicetify extensions folder, and apply |
 | `npm run release` | Build and copy the bundle into `builds/` |
 
+## Troubleshooting
+
+- **No "ModernEQ" entry in the profile menu** — your Spotify build must include the built-in equalizer (Settings → Playback → Equalizer). If that section is missing, ModernEQ stays inactive; check the console (`Ctrl+Shift+I`) for a `[ModernEQ]` message.
+- **Changes don't seem to do anything** — the EQ toggle at the top of the panel must be on. Since v1.1.0, adjusting any band switches it on automatically.
+- **Stock EQ page shows different values** — both UIs stay in sync automatically since v1.0.0. If they ever diverge, close and reopen the ModernEQ panel; it re-reads the native state.
+- **Panel looks broken after a Spotify update** — run `spicetify apply` again, and check GitHub for a newer ModernEQ release.
+
 ## How the band mapping works
 
 Spotify's audio engine has exactly 6 filters compiled into the native binary — no extension can add real DSP bands. ModernEQ models each native filter as an RBJ biquad (lowshelf @ 60 Hz, four peaking filters, highshelf @ 15 KHz) and solves a ridge-regularized least-squares fit that maps your 11-band target onto the 6 real gains. The white curve in the panel is the true response of that fit, so the mapping is never hidden.

@@ -1,19 +1,26 @@
 import { MENU_ICON } from "./icons";
 import { openPanel } from "./panel";
 
+function isProfileMenu(items: Element[]): boolean {
+    // Locale-independent: the profile menu always contains the Profile link (href="/user/...").
+    if (items.some((e) => (e.getAttribute("href") || "").startsWith("/user/"))) return true;
+    // Fallback for markup changes: English label match.
+    return items.some((e) => /private session|log out/i.test(e.textContent || ""));
+}
+
 function injectMenuItem(): void {
     const menus = document.querySelectorAll("ul[role=menu]");
     menus.forEach((menu) => {
         if (menu.querySelector(".meq-menu-item")) return;
         const items = [...menu.querySelectorAll("[role=menuitem], [role=menuitemcheckbox]")];
-        const isProfileMenu = items.some((e) => /private session|log out/i.test(e.textContent || ""));
-        if (!isProfileMenu) return;
+        if (!isProfileMenu(items)) return;
         const template = items.find((e) => !e.querySelector("svg")) || items[0];
         const li = template?.closest("li");
         if (!li) return;
         const clone = li.cloneNode(true) as HTMLElement;
         clone.classList.add("meq-menu-item");
         const btn = (clone.querySelector("[role=menuitem], [role=menuitemcheckbox]") || clone) as HTMLElement;
+        btn.removeAttribute("href");
         btn.querySelectorAll("svg").forEach((s) => s.remove());
         const label = ([...btn.querySelectorAll("span, div")] as HTMLElement[])
             .find((e) => e.childElementCount === 0 && (e.textContent || "").trim()) || btn;
@@ -35,5 +42,13 @@ function injectMenuItem(): void {
 }
 
 export function startMenuObserver(): void {
-    new MutationObserver(injectMenuItem).observe(document.body, { childList: true, subtree: true });
+    const observer = new MutationObserver(() => {
+        if (!document.querySelector("ul[role=menu]")) return;
+        try {
+            injectMenuItem();
+        } catch (e) {
+            console.warn("[ModernEQ] menu injection failed", e);
+        }
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
 }
