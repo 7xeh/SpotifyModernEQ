@@ -1,13 +1,13 @@
 {
   "id": "modern-eq",
   "name": "[MEQ] Modern EQ",
-  "description": "A modern multi-band equalizer for Spotify desktop with SUB/BASS/MID/TREBLE regions, presets, and live curve visualization.",
-  "author": "7xeh",
+  "description": "A Spicetify extension that replaces Spotify's stock equalizer with a modern 11-band EQ panel — SUB/BASS/MID/TREBLE regions, presets, and live curve visualization.",
+  "authors": [{ "name": "7xeh", "url": "https://github.com/7xeh" }],
   "version": "1.1.0",
-  "preview": "https://github.com/7xeh/SpotifyModernEQ/blob/main/icon.png?raw=true",
   "main": "loader/MEQ-loader.js",
+  "preview": "https://github.com/7xeh/SpotifyModernEQ/blob/main/icon.png?raw=true",
   "readme": "README.md",
-  "license": "MEQ Source-Available License v1.0",
+  "license": "SEE LICENSE IN LICENSE",
   "repository": "https://github.com/7xeh/SpotifyModernEQ",
   "spicetify": {
     "minVersion": "2.0.0"
@@ -19,6 +19,12 @@
     "spicetify-extension",
     "presets",
     "bass",
-    "treble"
+    "treble",
+    "sound",
+    "dsp",
+    "filters",
+    "visualization",
+    "multiband",
+    "customizable"
   ]
 }
