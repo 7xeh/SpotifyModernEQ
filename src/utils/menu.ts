@@ -1,6 +1,23 @@
 import { MENU_ICON } from "./icons";
 import { openPanel } from "./panel";
 
+const PROFILE_BUTTON = '[data-testid="user-widget-link"]';
+
+function profileButton(): HTMLElement | null {
+    return (document.querySelector(PROFILE_BUTTON)
+        || document.querySelector('[aria-haspopup=menu][aria-expanded=true]')) as HTMLElement | null;
+}
+
+function closeProfileMenu(): void {
+    // Pre-1.3.5 builds close the menu on Escape. From 1.3.5 the menu is a React Aria
+    // collection that ignores it, and only a second click on the avatar closes it.
+    document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    setTimeout(() => {
+        const profile = profileButton();
+        if (profile?.getAttribute("aria-expanded") === "true") profile.click();
+    }, 30);
+}
+
 function isProfileMenu(items: Element[]): boolean {
     // Locale-independent: the profile menu always contains the Profile link (href="/user/...").
     if (items.some((e) => (e.getAttribute("href") || "").startsWith("/user/"))) return true;
@@ -34,8 +51,8 @@ function injectMenuItem(): void {
         btn.onclick = (e) => {
             e.preventDefault();
             e.stopPropagation();
-            document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-            setTimeout(openPanel, 60);
+            closeProfileMenu();
+            setTimeout(openPanel, 80);
         };
         menu.insertBefore(clone, menu.firstChild);
     });
