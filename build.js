@@ -1,78 +1,168 @@
 const esbuild = require('esbuild');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const { execSync } = require('child_process');
+
+const BUILD_HASH_PLACEHOLDER = 'MEQ_BUILD_HASH_PLACEHOLDER_000000000000000000000000000';
 
 const ARGS = process.argv.slice(2);
 const IS_WATCH = ARGS.includes('--watch');
-let packageVersion = '0.0.0';
+const SKIP_BUMP = IS_WATCH || ARGS.includes('--no-bump');
 
-try {
-    const pkgPath = path.resolve(__dirname, 'package.json');
-    const manifestPath = path.resolve(__dirname, 'manifest.json');
-
-    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
-    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-    packageVersion = pkg.version;
-
-    if (manifest.version !== pkg.version) {
-        console.log(`[Sync] Updating manifest version: ${manifest.version} -> ${pkg.version}`);
-        manifest.version = pkg.version;
-        fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
-    }
-} catch (e) {
-    console.error('❌ Version sync failed:', e.message);
-    process.exit(1);
-}
-
+const MANIFEST_PATH = path.resolve(__dirname, 'manifest.json');
+const PACKAGE_PATH = path.resolve(__dirname, 'package.json');
+const README_PATH = path.resolve(__dirname, 'README.md');
 const OUT_DIR = 'dist';
 const OUT_DIR_PATH = path.resolve(__dirname, OUT_DIR);
 const OUT_FILE = path.join(OUT_DIR_PATH, 'modern-eq.js');
 
-if (fs.existsSync(OUT_DIR_PATH)) {
-    fs.rmSync(OUT_DIR_PATH, { recursive: true, force: true });
-}
-fs.mkdirSync(OUT_DIR_PATH, { recursive: true });
+const readJson = (filePath) => {
+    const raw = fs.readFileSync(filePath, 'utf8');
+    return { raw, data: JSON.parse(raw) };
+};
 
-console.log(`[Init] Mode: ${IS_WATCH ? 'WATCH' : 'BUILD'}`);
-console.log(`[Init] Output: ./${OUT_DIR}/`);
+const writeVersion = (filePath, file, version) => {
+    const pattern = /("version"\s*:\s*")[^"]*(")/;
+    if (!pattern.test(file.raw)) throw new Error(`No version field in ${path.basename(filePath)}`);
+    fs.writeFileSync(filePath, file.raw.replace(pattern, `$1${version}$2`));
+};
 
-const buildOptions = {
-    entryPoints: ['src/app.ts'],
-    bundle: true,
-    outfile: OUT_FILE,
-    format: 'iife',
-    globalName: 'ModernEQ',
-    platform: 'browser',
-    target: 'es2020',
-    minify: false,
-    sourcemap: IS_WATCH ? 'inline' : false,
-    logLevel: 'info',
-    define: {
-        '__VERSION__': JSON.stringify(packageVersion),
-        '__DEV__': JSON.stringify(false)
+const writeReadmeVersion = (version) => {
+    if (!fs.existsSync(README_PATH)) return;
+    const raw = fs.readFileSync(README_PATH, 'utf8');
+    const pattern = /(img\.shields\.io\/badge\/Version-)[^-?)\s]+(-)/;
+    if (!pattern.test(raw)) {
+        console.warn('[Version] No version badge found in README.md');
+        return;
     }
+    const updated = raw.replace(pattern, `$1${version}$2`);
+    if (updated !== raw) fs.writeFileSync(README_PATH, updated);
+};
+
+const parseVersion = (version) => {
+    const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(String(version).trim());
+    if (!match) throw new Error(`Invalid version "${version}" (expected x.y.z)`);
+    return match.slice(1).map(Number);
+};
+
+const bumpVersion = (version) => {
+    let [major, minor, patch] = parseVersion(version);
+    patch += 1;
+    if (patch > 9) {
+        patch = 0;
+        minor += 1;
+    }
+    if (minor > 9) {
+        minor = 0;
+        major += 1;
+    }
+    return `${major}.${minor}.${patch}`;
+};
+
+const formatMs = (ms) => (ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(2)}s`);
+
+const stampBuildHash = () => {
+    if (!fs.existsSync(OUT_FILE)) return;
+    const code = fs.readFileSync(OUT_FILE, 'utf8');
+    if (!code.includes(BUILD_HASH_PLACEHOLDER)) return;
+    const hash = crypto.createHash('sha256').update(code).digest('hex');
+    fs.writeFileSync(OUT_FILE, code.split(BUILD_HASH_PLACEHOLDER).join(hash));
+    console.log(`[Hash] Build hash: ${hash.substring(0, 12)}`);
 };
 
 const run = async () => {
-    if (!IS_WATCH) {
-        console.log('[TS] Checking types...');
-        try {
-            execSync('npx tsc --noEmit', { stdio: 'inherit' });
-        } catch (e) {
-            console.error('❌ Type check failed.');
-            process.exit(1);
-        }
+    const startedAt = Date.now();
+
+    let manifest;
+    let pkg;
+    try {
+        manifest = readJson(MANIFEST_PATH);
+        pkg = readJson(PACKAGE_PATH);
+    } catch (e) {
+        console.error(`❌ Could not read manifest.json/package.json: ${e.message}`);
+        process.exit(1);
     }
+
+    const currentVersion = manifest.data.version;
+    let nextVersion;
+    try {
+        nextVersion = SKIP_BUMP ? currentVersion : bumpVersion(currentVersion);
+        parseVersion(nextVersion);
+    } catch (e) {
+        console.error(`❌ ${e.message} in manifest.json`);
+        process.exit(1);
+    }
+
+    console.log(`[Init] Mode: ${IS_WATCH ? 'WATCH' : 'BUILD'}`);
+    console.log(`[Init] Output: ./${OUT_DIR}/`);
+    console.log(SKIP_BUMP ? `[Version] ${nextVersion} (no bump)` : `[Version] ${currentVersion} -> ${nextVersion}`);
+
+    if (fs.existsSync(OUT_DIR_PATH)) {
+        fs.rmSync(OUT_DIR_PATH, { recursive: true, force: true });
+    }
+    fs.mkdirSync(OUT_DIR_PATH, { recursive: true });
+
+    const buildOptions = {
+        entryPoints: ['src/app.ts'],
+        bundle: true,
+        outfile: OUT_FILE,
+        format: 'iife',
+        globalName: 'ModernEQBundle',
+        platform: 'browser',
+        target: 'es2020',
+        minify: false,
+        sourcemap: IS_WATCH ? 'inline' : false,
+        logLevel: 'info',
+        define: {
+            '__VERSION__': JSON.stringify(nextVersion),
+            '__DEV__': JSON.stringify(false),
+            '__BUILD_HASH__': JSON.stringify(BUILD_HASH_PLACEHOLDER)
+        }
+    };
 
     if (IS_WATCH) {
-        const ctx = await esbuild.context(buildOptions);
+        const ctx = await esbuild.context({
+            ...buildOptions,
+            plugins: [{
+                name: 'meq-build-hash',
+                setup(build) {
+                    build.onEnd(() => stampBuildHash());
+                }
+            }]
+        });
         await ctx.watch();
-        console.log(`[Watch] Watching for changes...`);
-    } else {
-        await esbuild.build(buildOptions);
-        console.log(`✅ Build complete`);
+        console.log('[Watch] Watching for changes...');
+        return;
     }
+
+    console.log('[TS] Checking types...');
+    try {
+        execSync('npx tsc --noEmit', { stdio: 'inherit', cwd: __dirname });
+    } catch {
+        console.error(`❌ Type check failed. Version left at ${currentVersion}.`);
+        process.exit(1);
+    }
+
+    await esbuild.build(buildOptions);
+    stampBuildHash();
+
+    if (!SKIP_BUMP) {
+        writeVersion(MANIFEST_PATH, manifest, nextVersion);
+        writeReadmeVersion(nextVersion);
+    }
+    if (pkg.data.version !== nextVersion) {
+        writeVersion(PACKAGE_PATH, pkg, nextVersion);
+    }
+
+    console.log(`✅ Built v${nextVersion} in ${formatMs(Date.now() - startedAt)}`);
 };
 
-run().catch(() => process.exit(1));
+if (require.main === module) {
+    run().catch((e) => {
+        console.error(`❌ Build failed${e && e.message ? `: ${e.message}` : ''}`);
+        process.exit(1);
+    });
+}
+
+module.exports = { bumpVersion, parseVersion };

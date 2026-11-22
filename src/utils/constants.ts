@@ -1,8 +1,8 @@
 export const FS = 48000;
 export const GAIN_LIMIT = 12;
 export const VIEW_RANGE = 14;
-export const LS_STATE = "moderneq:state";
-export const LS_PRESETS = "moderneq:presets";
+export const LS_STATE = "state";
+export const LS_PRESETS = "presets";
 
 export type FilterType = "lowshelf" | "peaking" | "highshelf";
 

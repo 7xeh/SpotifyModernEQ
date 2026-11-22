@@ -9,11 +9,11 @@ Replace Spotify's buried 6-slider equalizer with an 11-band panel — SUB / BASS
 [![Discord](https://img.shields.io/badge/Discord-Join%20the%20Community-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/fXK34DeDW5)
 
 ![Spicetify](https://img.shields.io/badge/Spicetify-Extension-1DB954?style=flat-square&logo=spotify&logoColor=white)
-![Version](https://img.shields.io/badge/Version-1.1.0-blue?style=flat-square)
+![Version](https://img.shields.io/badge/Version-1.1.1-blue?style=flat-square)
 ![License](https://img.shields.io/badge/License-Source%20Available-blue?style=flat-square)
 ![Status](https://img.shields.io/badge/Status-Online-success?style=flat-square)
 
-[Highlights](#highlights) · [Install](#install) · [Usage](#usage) · [How the band mapping works](#how-the-band-mapping-works) · [Troubleshooting](#troubleshooting)
+[Getting Started](docs/getting-started.md) · [Install](docs/installation.md) · [Presets](docs/presets.md) · [How It Works](docs/how-it-works.md) · [Troubleshooting](docs/troubleshooting.md) · [All Docs](docs/README.md)
 
 ![Preview](https://github.com/7xeh/SpotifyModernEQ/blob/main/icon.png?raw=true)
 
@@ -31,8 +31,9 @@ Replace Spotify's buried 6-slider equalizer with an 11-band panel — SUB / BASS
 - **14 built-in presets** — Bass Boost, V-Shape, Vocal Clarity, Loudness, and more — plus unlimited custom presets you can save, load, and delete
 - **Two-way sync with the stock EQ** — the ModernEQ panel and Spotify's own equalizer page never disagree, and the stock page's stale state can't overwrite yours
 - **Zero-latency apply** — only changed filters are written, in parallel
-- **Update checker** — direct installs check GitHub once a day and show a notice when a newer release exists
-- **Opens from the profile menu** — the top-right avatar dropdown, on any client locale
+- **Self-updating loader** — fetches releases at runtime with SHA-256 integrity checks, a CORS-proxy fallback, and a self-healing recovery dialog
+- **In-app update prompts** — scheduled checks (with backoff) surface as bottom-left toasts; loader installs apply in place with one reload, direct installs link to the release
+- **Opens from the profile menu** — the top-right avatar dropdown, on any client locale, plus a `window.ModernEQ` console API
 
 ---
 
@@ -86,10 +87,26 @@ The white curve in the panel is the true response of that fit — what you see i
 
 | Command | Description |
 | --- | --- |
-| `npm run build` | Type-check and bundle `src/` into `dist/modern-eq.js` |
-| `npm run build:watch` | Rebuild on change |
-| `npm run deploy` | Build, copy to the Spicetify extensions folder, and apply |
-| `npm run release` | Build and copy the bundle into `builds/` |
+| `npm run build` | Type-check, bump the patch version, bundle `src/` into `dist/modern-eq.js`, and stamp the build hash |
+| `npm run build:watch` | Rebuild on change (no version bump) |
+| `npm run deploy` | Build, locate Spicetify, copy to the Extensions folder, register, and apply |
+| `npm run release` | Build the current version without bumping |
+| `npm test` | Run the loader-fallback and build-version test suites |
+
+The build keeps `package.json`, `manifest.json`, and the README version badge in sync automatically.
+
+---
+
+## Documentation
+
+| Page | What's in it |
+| --- | --- |
+| [Getting Started](docs/getting-started.md) | Requirements, first run, the panel, every control |
+| [Installation](docs/installation.md) | From source, the loader script, and the Windows installer |
+| [Presets](docs/presets.md) | The 14 built-in presets and saving your own |
+| [How It Works](docs/how-it-works.md) | The 11-band to 6-filter fit, the curves, and two-way sync |
+| [Settings](docs/settings.md) | The console API, debug mode, updates, and storage |
+| [Troubleshooting](docs/troubleshooting.md) | Common problems and fixes |
 
 ---
 

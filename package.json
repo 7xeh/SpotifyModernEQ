@@ -1,6 +1,6 @@
 {
   "name": "modern-eq",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "A Spicetify extension that replaces Spotify's stock equalizer with a modern multi-band EQ panel with regions, presets, and live curve visualization.",
   "main": "dist/modern-eq.js",
   "repository": {
@@ -14,9 +14,10 @@
   "scripts": {
     "build": "node build.js",
     "build:watch": "node build.js --watch",
-    "deploy": "npm run build && copy dist\\modern-eq.js \"%APPDATA%\\spicetify\\Extensions\\\" && spicetify apply",
+    "deploy": "node deploy.js",
     "apply": "spicetify apply",
-    "release": "npm run build && copy dist\\modern-eq.js builds\\modern-eq.js"
+    "release": "node build.js --no-bump",
+    "test": "node --test \"tests/**/*.test.mjs\""
   },
   "keywords": [
     "spicetify",

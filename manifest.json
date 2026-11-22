@@ -3,7 +3,7 @@
   "name": "[MEQ] Modern EQ",
   "description": "A Spicetify extension that replaces Spotify's stock equalizer with a modern 11-band EQ panel — SUB/BASS/MID/TREBLE regions, presets, and live curve visualization.",
   "authors": [{ "name": "7xeh", "url": "https://github.com/7xeh" }],
-  "version": "1.1.0",
+  "version": "1.1.1",
   "main": "loader/MEQ-loader.js",
   "preview": "https://github.com/7xeh/SpotifyModernEQ/blob/main/icon.png?raw=true",
   "readme": "README.md",

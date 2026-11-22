@@ -1,5 +1,7 @@
 import { BANDS, LS_PRESETS, LS_STATE, NATIVE, clampDb } from "./constants";
 import { fitToNative, nativeResponse } from "./dsp";
+import { storage } from "./storage";
+import { warn, error as logError } from "./debug";
 
 export interface CustomPreset {
     name: string;
@@ -20,46 +22,40 @@ function sanitizeBands(raw: unknown): number[] | null {
 }
 
 export function loadState(): void {
-    try {
-        const s = JSON.parse(localStorage.getItem(LS_STATE) || "null");
-        const bands = sanitizeBands(s?.bands);
-        if (bands) {
-            state.bands = bands;
-            state.presetName = typeof s.preset === "string" ? s.preset : "Manual";
-        }
-    } catch {}
+    const s = storage.getJSON<{ bands?: unknown; preset?: unknown } | null>(LS_STATE, null);
+    const bands = sanitizeBands(s?.bands);
+    if (bands) {
+        state.bands = bands;
+        state.presetName = typeof s?.preset === "string" ? s.preset : "Manual";
+    }
     state.fitted = fitToNative(state.bands);
 }
 
 export function saveState(): void {
-    localStorage.setItem(LS_STATE, JSON.stringify({ bands: state.bands, preset: state.presetName }));
+    storage.setJSON(LS_STATE, { bands: state.bands, preset: state.presetName });
 }
 
 export function customPresets(): CustomPreset[] {
-    try {
-        const raw = JSON.parse(localStorage.getItem(LS_PRESETS) || "null");
-        if (!Array.isArray(raw)) return [];
-        return raw
-            .map((p) => {
-                const bands = sanitizeBands(p?.bands);
-                return typeof p?.name === "string" && p.name.trim() && bands
-                    ? { name: p.name.slice(0, 32), bands }
-                    : null;
-            })
-            .filter((p): p is CustomPreset => p !== null);
-    } catch {
-        return [];
-    }
+    const raw = storage.getJSON<unknown>(LS_PRESETS, null);
+    if (!Array.isArray(raw)) return [];
+    return raw
+        .map((p) => {
+            const bands = sanitizeBands(p?.bands);
+            return typeof p?.name === "string" && p.name.trim() && bands
+                ? { name: p.name.slice(0, 32), bands }
+                : null;
+        })
+        .filter((p): p is CustomPreset => p !== null);
 }
 
 export function saveCustomPreset(name: string): void {
     const list = customPresets().filter((p) => p.name !== name);
     list.push({ name, bands: [...state.bands] });
-    localStorage.setItem(LS_PRESETS, JSON.stringify(list));
+    storage.setJSON(LS_PRESETS, list);
 }
 
 export function deleteCustomPreset(name: string): void {
-    localStorage.setItem(LS_PRESETS, JSON.stringify(customPresets().filter((p) => p.name !== name)));
+    storage.setJSON(LS_PRESETS, customPresets().filter((p) => p.name !== name));
 }
 
 let lastApplied: number[] | null = null;
@@ -100,7 +96,7 @@ export async function pushGains(): Promise<void> {
             mirrorToStockUI(target);
         } while (dirty);
     } catch (e) {
-        console.error("[ModernEQ] failed to apply gains", e);
+        logError("failed to apply gains", e);
         lastApplied = null;
     } finally {
         writing = false;
@@ -125,7 +121,7 @@ export async function syncFromNative(): Promise<boolean> {
         lastApplied = [...current];
         return drift;
     } catch (e) {
-        console.warn("[ModernEQ] syncFromNative failed", e);
+        warn("syncFromNative failed", e);
         return false;
     }
 }
@@ -145,7 +141,7 @@ export function subscribeToGainChanges(onExternalChange: () => void): () => void
             })
         );
     } catch (e) {
-        console.warn("[ModernEQ] gain subscription unavailable", e);
+        warn("gain subscription unavailable", e);
     }
     return () => {
         clearTimeout(debounce);

@@ -4,6 +4,9 @@
     const VERSION_API_URL = `https://${API_HOST}/apps/moderneq/api/version.php`;
     const GITHUB_REPO = '7xeh/SpotifyModernEQ';
     const GITHUB_LATEST_RELEASE_API = `https://api.github.com/repos/${GITHUB_REPO}/releases/latest`;
+    const BUNDLE_ASSET_NAME = 'modern-eq.js';
+    const CORS_PROXY_TEMPLATE_KEY = 'spicetify:corsProxyTemplate';
+    const DEFAULT_CORS_PROXY_TEMPLATE = 'https://cors-proxy.spicetify.app/{url}';
     const STORAGE_PREFIX = 'moderneq:';
     const DEBUG_MODE = localStorage.getItem(STORAGE_PREFIX + 'debug-mode') === 'true';
 
@@ -19,6 +22,28 @@
     const appendCacheBust = (url) => `${url}${url.includes('?') ? '&' : '?'}_=${Date.now()}`;
 
     const normalizeVersion = (value) => String(value || '').trim().replace(/^v/i, '');
+
+    const normalizeHash = (value) => {
+        const hash = String(value || '').trim().replace(/^sha256:/i, '').toLowerCase();
+        return /^[0-9a-f]{64}$/.test(hash) ? hash : null;
+    };
+
+    const officialReleaseAssetUrl = (version) =>
+        `https://github.com/${GITHUB_REPO}/releases/download/v${encodeURIComponent(version)}/${BUNDLE_ASSET_NAME}`;
+
+    const corsProxyUrl = (targetUrl) => {
+        let template = DEFAULT_CORS_PROXY_TEMPLATE;
+        try {
+            template = localStorage.getItem(CORS_PROXY_TEMPLATE_KEY) || DEFAULT_CORS_PROXY_TEMPLATE;
+        } catch {}
+        if (typeof template !== 'string' || !template.includes('{url}')) return null;
+        try {
+            const proxied = new URL(template.replace('{url}', targetUrl));
+            return proxied.protocol === 'https:' ? proxied.toString() : null;
+        } catch {
+            return null;
+        }
+    };
 
     const computeSHA256 = async (text) => {
         try {
@@ -70,7 +95,7 @@
 
         return {
             version,
-            hash: data.hash || data.sha256 || data.checksum || null,
+            hash: String(data.hash || data.sha256 || data.checksum || '').toLowerCase() || null,
             downloadUrl: data.download_url || ''
         };
     };
@@ -85,15 +110,15 @@
         const version = normalizeVersion(release.tag_name);
         if (!version) throw new Error('GitHub API did not return a valid release tag');
 
-        const jsAsset = Array.isArray(release.assets)
-            ? release.assets.find(asset => typeof asset?.name === 'string' && asset.name.endsWith('.js'))
+        const bundleAsset = Array.isArray(release.assets)
+            ? release.assets.find(asset => asset?.name === BUNDLE_ASSET_NAME)
             : null;
-        const hash = jsAsset?.digest ? String(jsAsset.digest).replace(/^sha256:/i, '') : null;
+        const expectedUrl = officialReleaseAssetUrl(version);
 
         return {
             version,
-            hash,
-            downloadUrl: jsAsset?.browser_download_url || ''
+            hash: normalizeHash(bundleAsset?.digest),
+            downloadUrl: bundleAsset?.browser_download_url === expectedUrl ? expectedUrl : ''
         };
     };
 
@@ -107,45 +132,67 @@
     };
 
     const loadExtension = async (version, preferredDownloadUrl = '', expectedHash = null) => {
-        const candidates = [
-            preferredDownloadUrl,
-            `${EXTENSION_BASE_URL}/versions/v${version}/modern-eq.js`,
-            `${EXTENSION_BASE_URL}/latest/modern-eq.js`,
-        ].filter(Boolean);
+        const candidates = [];
+        if (preferredDownloadUrl) candidates.push({ url: preferredDownloadUrl, proxied: false });
 
-        let response = null;
+        const releaseUrl = officialReleaseAssetUrl(version);
+        if (preferredDownloadUrl === releaseUrl) {
+            const proxiedUrl = expectedHash ? corsProxyUrl(releaseUrl) : null;
+            if (proxiedUrl) candidates.push({ url: proxiedUrl, proxied: true });
+            else log.debug('CORS proxy fallback skipped: missing release digest or invalid proxy template');
+        }
+
+        candidates.push(
+            { url: `${EXTENSION_BASE_URL}/versions/v${version}/${BUNDLE_ASSET_NAME}`, proxied: false },
+            { url: `${EXTENSION_BASE_URL}/latest/${BUNDLE_ASSET_NAME}`, proxied: false },
+        );
+
+        const seen = new Set();
+        let code = null;
+        let contentHash = null;
         let resolvedUrl = '';
         let lastFetchError = null;
 
-        for (const baseUrl of [...new Set(candidates)]) {
-            const url = appendCacheBust(baseUrl);
+        for (const candidate of candidates) {
+            if (seen.has(candidate.url)) continue;
+            seen.add(candidate.url);
             try {
-                const currentResponse = await fetch(url);
-                if (!currentResponse.ok) {
-                    throw new Error(`HTTP ${currentResponse.status}`);
+                const response = await fetch(candidate.proxied ? candidate.url : appendCacheBust(candidate.url));
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
                 }
 
-                response = currentResponse;
-                resolvedUrl = baseUrl;
+                const text = await response.text();
+                const hash = await computeSHA256(text);
+
+                if (candidate.proxied) {
+                    if (!hash) throw new Error('Proxied download rejected: SHA-256 unavailable');
+                    if (hash !== expectedHash) {
+                        throw new Error(`Proxied download rejected: expected ${expectedHash.substring(0, 12)}, got ${hash.substring(0, 12)}`);
+                    }
+                } else if (expectedHash && hash && expectedHash !== hash) {
+                    throw Object.assign(
+                        new Error(`Integrity check failed: expected ${expectedHash.substring(0, 12)}, got ${hash.substring(0, 12)}`),
+                        { fatal: true }
+                    );
+                }
+
+                code = text;
+                contentHash = hash;
+                resolvedUrl = candidate.url;
                 break;
             } catch (e) {
+                if (e?.fatal) throw e;
                 lastFetchError = e;
-                log.debug(`Failed loader source ${baseUrl}:`, e);
+                log.debug(`Failed loader source ${candidate.url}:`, e);
             }
         }
 
-        if (!response) {
+        if (code === null) {
             throw new Error(`Failed to load extension from all sources: ${lastFetchError?.message || 'Unknown error'}`);
         }
 
         log.debug('Extension loaded from source:', resolvedUrl);
-
-        const code = await response.text();
-        const contentHash = await computeSHA256(code);
-
-        if (expectedHash && contentHash && expectedHash !== contentHash) {
-            throw new Error(`Integrity check failed: expected ${expectedHash.substring(0, 12)}, got ${contentHash.substring(0, 12)}`);
-        }
 
         if (contentHash) storageSet('content-hash', contentHash);
         storageSet('loaded-version', version);
@@ -167,46 +214,298 @@
         log.info(`Loaded v${version}${hashTag}`);
     };
 
-    const showError = (message) => {
-        const safeMessage = String(message || 'Unknown error')
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;')
-            .replace(/'/g, '&#39;');
+    const LOADER_STYLE_ID = 'meq-ld-styles';
+    const LOADER_CSS = `
+.meq-ld-overlay {
+    --meq-ld-accent: #1ed760;
+    --meq-ld-accent-ink: #06210f;
+    --meq-ld-field: #1b1b1b;
+    --meq-ld-deep: #121212;
+    --meq-ld-ink: #f4f4f4;
+    --meq-ld-muted: #c6c6c6;
+    --meq-ld-faint: #9a9a9a;
+    --meq-ld-line: rgba(255, 255, 255, 0.11);
+    position: fixed;
+    inset: 0;
+    z-index: 2147482000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+    box-sizing: border-box;
+    background: rgba(0, 0, 0, 0);
+    font-family: var(--encore-body-font-stack, system-ui, sans-serif);
+    -webkit-font-smoothing: antialiased;
+    color: var(--meq-ld-ink);
+    transition: background-color 0.24s ease, backdrop-filter 0.24s ease;
+}
+.meq-ld-overlay.meq-ld-open { background: rgba(0, 0, 0, 0.55); backdrop-filter: blur(6px); }
+.meq-ld-overlay.meq-ld-closing { pointer-events: none; background: rgba(0, 0, 0, 0); backdrop-filter: blur(0); }
+.meq-ld-panel {
+    position: relative;
+    width: min(28rem, 100%);
+    box-sizing: border-box;
+    overflow: hidden;
+    padding: 26px 26px 22px;
+    border-radius: 18px;
+    border: 1px solid var(--meq-ld-line);
+    background: linear-gradient(180deg, var(--meq-ld-field), var(--meq-ld-deep));
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 24px 60px -24px rgba(0, 0, 0, 0.7);
+    opacity: 0;
+    transform: translateY(10px);
+    transition: opacity 0.2s ease, transform 0.4s cubic-bezier(0.2, 0.9, 0.1, 1);
+}
+.meq-ld-open .meq-ld-panel { opacity: 1; transform: none; }
+.meq-ld-closing .meq-ld-panel { opacity: 0; transform: translateY(4px) scale(0.985); transition-duration: 0.16s; }
+.meq-ld-eyebrow { font-size: 12px; font-weight: 600; color: var(--meq-ld-muted); margin: 0 0 8px; }
+.meq-ld-title { margin: 0 0 10px; font-size: 22px; font-weight: 750; letter-spacing: -0.02em; line-height: 1.15; }
+.meq-ld-text { margin: 0 0 12px; font-size: 14px; line-height: 1.55; color: var(--meq-ld-muted); }
+.meq-ld-text a { color: var(--meq-ld-ink); font-weight: 600; text-underline-offset: 3px; }
+.meq-ld-detail {
+    margin: 0 0 14px;
+    padding: 10px 12px;
+    border-radius: 11px;
+    border: 1px solid var(--meq-ld-line);
+    background: rgba(0, 0, 0, 0.35);
+    font-family: 'JetBrains Mono', ui-monospace, Consolas, monospace;
+    font-size: 12px;
+    color: var(--meq-ld-muted);
+    overflow-wrap: anywhere;
+}
+.meq-ld-status { display: flex; align-items: center; gap: 10px; font-size: 12.5px; color: var(--meq-ld-faint); font-variant-numeric: tabular-nums; }
+.meq-ld-status[hidden] { display: none; }
+.meq-ld-ring { width: 18px; height: 18px; transform: rotate(-90deg); flex: 0 0 auto; }
+.meq-ld-ring circle { fill: none; stroke-width: 2.4; }
+.meq-ld-ring-track { stroke: var(--meq-ld-line); }
+.meq-ld-ring-fill { stroke: var(--meq-ld-accent); stroke-linecap: round; transition: stroke-dashoffset 0.95s linear; }
+.meq-ld-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+.meq-ld-btn {
+    appearance: none;
+    min-height: 40px;
+    padding: 0 18px;
+    border: 0;
+    border-radius: 12px;
+    font: inherit;
+    font-size: 13.5px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: background-color 0.15s ease, transform 0.12s ease;
+}
+.meq-ld-btn:active { transform: scale(0.97); }
+.meq-ld-btn:disabled { opacity: 0.6; cursor: default; }
+.meq-ld-btn:focus-visible { outline: 2px solid var(--meq-ld-accent); outline-offset: 2px; }
+.meq-ld-primary { background: var(--meq-ld-accent); color: var(--meq-ld-accent-ink); }
+.meq-ld-quiet { background: transparent; color: var(--meq-ld-muted); }
+.meq-ld-quiet:hover { background: var(--meq-ld-line); color: var(--meq-ld-ink); }
+.meq-ld-toast {
+    position: fixed;
+    left: 16px;
+    bottom: 110px;
+    z-index: 2147482500;
+    padding: 12px 16px;
+    border-radius: 14px;
+    border: 1px solid var(--meq-ld-line);
+    background: linear-gradient(170deg, #1d3a28, #15271c);
+    color: #eafff1;
+    font-family: var(--encore-body-font-stack, system-ui, sans-serif);
+    font-size: 13.5px;
+    font-weight: 650;
+    box-shadow: 0 16px 36px -14px rgba(0, 0, 0, 0.75);
+    transition: opacity 0.3s ease, transform 0.3s ease;
+}
+@media (prefers-reduced-motion: reduce) {
+    .meq-ld-overlay, .meq-ld-panel, .meq-ld-ring-fill { transition-duration: 0.01ms !important; }
+    .meq-ld-panel { transform: none !important; }
+}`;
 
-        const waitForModal = setInterval(() => {
-            if (typeof Spicetify !== 'undefined' && Spicetify.PopupModal) {
-                clearInterval(waitForModal);
-                Spicetify.PopupModal.display({
-                    title: "ModernEQ - Error",
-                    content: (() => {
-                        const div = document.createElement('div');
-                        div.innerHTML = `
-                            <div style="text-align: center; padding: 16px 0;">
-                                <h3 style="margin: 0 0 12px; font-size: 1.2rem; font-weight: 600;">
-                                    Failed to load extension
-                                </h3>
-                                <p style="margin: 0 0 16px; opacity: 0.7;">
-                                    ${safeMessage}
-                                </p>
-                                <p style="margin: 0 0 8px;">
-                                    Please check your network connection and try restarting Spotify.
-                                </p>
-                                <p style="margin: 16px 0 0; font-size: 0.9rem; opacity: 0.7;">
-                                    Need help? Visit
-                                    <a href="https://github.com/7xeh/SpotifyModernEQ/issues" style="text-decoration: underline;">GitHub Issues</a>
-                                </p>
-                            </div>
-                        `;
-                        return div;
-                    })(),
-                    isLarge: false
-                });
+    const ensureLoaderStyles = () => {
+        if (document.getElementById(LOADER_STYLE_ID)) return;
+        const style = document.createElement('style');
+        style.id = LOADER_STYLE_ID;
+        style.textContent = LOADER_CSS;
+        document.head.appendChild(style);
+    };
+
+    const h = (tag, props = {}, ...children) => {
+        const node = document.createElement(tag);
+        Object.entries(props).forEach(([key, value]) => {
+            if (value === undefined || value === false) return;
+            if (key === 'class') node.className = value;
+            else if (key === 'text') node.textContent = value;
+            else node.setAttribute(key, value === true ? '' : String(value));
+        });
+        children.forEach(child => child && node.append(child));
+        return node;
+    };
+
+    const formatWait = (ms) => {
+        const total = Math.max(0, Math.ceil(ms / 1000));
+        return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`;
+    };
+
+    const showRecovered = () => {
+        ensureLoaderStyles();
+        const toast = h('div', { class: 'meq-ld-toast', role: 'status', text: 'Modern EQ is back' });
+        document.body.append(toast);
+        setTimeout(() => {
+            toast.style.opacity = '0';
+            toast.style.transform = 'translateX(-12px)';
+            setTimeout(() => toast.remove(), 320);
+        }, 3200);
+    };
+
+    let activeError = null;
+
+    const showError = (message, retry = null) => {
+        activeError?.close(true);
+        const mount = () => {
+            if (!document.body) {
+                setTimeout(mount, 100);
+                return;
             }
-        }, 100);
+            ensureLoaderStyles();
 
-        setTimeout(() => clearInterval(waitForModal), 10000);
+            let retryDelay = 30000;
+            let nextAt = 0;
+            let timer = 0;
+            let ticker = 0;
+            let busy = false;
+            let closed = false;
+
+            const detail = h('p', { class: 'meq-ld-detail', text: String(message || 'Unknown error') });
+            const ringFill = h('span');
+            ringFill.innerHTML = '<svg class="meq-ld-ring" viewBox="0 0 20 20" aria-hidden="true"><circle class="meq-ld-ring-track" cx="10" cy="10" r="7.5"/><circle class="meq-ld-ring-fill" cx="10" cy="10" r="7.5" stroke-dasharray="47.12" stroke-dashoffset="0"/></svg>';
+            const statusText = h('span');
+            const status = h('div', { class: 'meq-ld-status', 'aria-live': 'polite', hidden: !retry }, ringFill, statusText);
+            const help = h('p', { class: 'meq-ld-text' });
+            help.append('Still stuck? Ask on ');
+            help.append(h('a', { href: 'https://github.com/7xeh/SpotifyModernEQ/issues', target: '_blank', rel: 'noopener noreferrer', text: 'GitHub Issues' }));
+            help.append('.');
+
+            const tryBtn = h('button', { class: 'meq-ld-btn meq-ld-primary', type: 'button', text: 'Try again' });
+            const closeBtn = h('button', { class: 'meq-ld-btn meq-ld-quiet', type: 'button', text: retry ? 'Keep trying in background' : 'Close' });
+            const panel = h('section', { class: 'meq-ld-panel', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'meq-ld-title' },
+                h('p', { class: 'meq-ld-eyebrow', text: 'Modern EQ' }),
+                h('h2', { class: 'meq-ld-title', id: 'meq-ld-title', text: "Modern EQ couldn't load" }),
+                h('p', { class: 'meq-ld-text', text: retry
+                    ? "Your music still plays, the equalizer panel just won't be available until this loads. Check your connection, a VPN or an ad blocker."
+                    : 'Fully quit Spotify and open it again. That usually fixes this.' }),
+                detail,
+                status,
+                help,
+                h('div', { class: 'meq-ld-actions' }, closeBtn, retry ? tryBtn : null),
+            );
+            const overlay = h('div', { class: 'meq-ld-overlay' }, panel);
+
+            const fill = ringFill.querySelector('.meq-ld-ring-fill');
+            const paint = () => {
+                if (busy) {
+                    statusText.textContent = 'Trying now…';
+                    fill.setAttribute('stroke-dashoffset', '0');
+                    return;
+                }
+                const left = nextAt - Date.now();
+                statusText.textContent = `Trying again in ${formatWait(left)}`;
+                fill.setAttribute('stroke-dashoffset', String(47.12 * (1 - Math.max(0, Math.min(1, left / retryDelay)))));
+            };
+
+            const schedule = () => {
+                if (!retry || closed === 'done') return;
+                clearTimeout(timer);
+                nextAt = Date.now() + retryDelay;
+                timer = setTimeout(attempt, retryDelay);
+                paint();
+            };
+
+            const attempt = async () => {
+                if (!retry || busy) return;
+                busy = true;
+                tryBtn.disabled = true;
+                tryBtn.textContent = 'Connecting…';
+                paint();
+                clearTimeout(timer);
+                const result = await retry();
+                busy = false;
+                tryBtn.disabled = false;
+                tryBtn.textContent = 'Try again';
+                if (result && result.ok) {
+                    finish();
+                    showRecovered();
+                    return;
+                }
+                if (result && result.message) detail.textContent = result.message;
+                retryDelay = Math.min(5 * 60 * 1000, Math.round(retryDelay * 1.6));
+                schedule();
+            };
+
+            const onKey = (event) => {
+                if (event.key !== 'Escape' || closed) return;
+                event.preventDefault();
+                event.stopImmediatePropagation();
+                hide();
+            };
+
+            const removeOverlay = (immediate) => {
+                document.removeEventListener('keydown', onKey, true);
+                if (immediate) {
+                    overlay.remove();
+                    return;
+                }
+                overlay.classList.remove('meq-ld-open');
+                overlay.classList.add('meq-ld-closing');
+                setTimeout(() => overlay.remove(), 220);
+            };
+
+            const hide = () => {
+                if (closed) return;
+                closed = 'hidden';
+                removeOverlay(false);
+            };
+
+            const finish = (immediate = false) => {
+                closed = 'done';
+                clearTimeout(timer);
+                clearInterval(ticker);
+                window.removeEventListener('online', attempt);
+                if (activeError === handle) activeError = null;
+                if (overlay.isConnected) removeOverlay(immediate);
+            };
+
+            const handle = { close: finish };
+            activeError = handle;
+
+            tryBtn.addEventListener('click', attempt);
+            closeBtn.addEventListener('click', () => (retry ? hide() : finish()));
+            overlay.addEventListener('pointerdown', (event) => {
+                overlay.dataset.pressed = event.target === overlay ? '1' : '';
+            });
+            overlay.addEventListener('click', (event) => {
+                if (event.target === overlay && overlay.dataset.pressed === '1') retry ? hide() : finish();
+            });
+            document.addEventListener('keydown', onKey, true);
+            if (retry) {
+                window.addEventListener('online', attempt);
+                ticker = setInterval(paint, 1000);
+                schedule();
+            }
+
+            document.body.append(overlay);
+            overlay.getBoundingClientRect();
+            overlay.classList.add('meq-ld-open');
+            (retry ? tryBtn : closeBtn).focus({ preventScroll: true });
+        };
+        mount();
+    };
+
+    const loadOnce = async () => {
+        try {
+            const info = await getVersionInfo();
+            await loadExtension(info.version, info.downloadUrl || '', info.hash);
+            return { ok: true };
+        } catch (err) {
+            log.warn('Retry failed:', err);
+            return { ok: false, message: err?.message || 'Unknown error' };
+        }
     };
 
     const load = async (retries = 3) => {
@@ -214,11 +513,11 @@
             await waitForSpicetify();
         } catch (err) {
             log.error('Required dependency unavailable:', err);
-            showError('Spicetify is not available. Please fully restart Spotify and try again.');
+            showError('Spicetify is not available.');
             return;
         }
 
-        log.info('Loading ModernEQ...');
+        log.info('Loading Modern EQ...');
 
         let lastError;
 
@@ -239,7 +538,7 @@
         }
 
         log.error('Failed to load after all retries:', lastError);
-        showError(lastError?.message || 'Unknown error');
+        showError(lastError?.message || 'Unknown error', loadOnce);
     };
 
     load();

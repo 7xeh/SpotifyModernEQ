@@ -2,6 +2,7 @@ import { BANDS, BAND_LABELS, NATIVE, PRESETS, REGIONS, VIEW_RANGE, clampDb } fro
 import { fitToNative, nativeResponse } from "./dsp";
 import { PANEL_ICON } from "./icons";
 import { customPresets, deleteCustomPreset, pushGains, saveCustomPreset, saveState, state, subscribeToGainChanges, syncFromNative } from "./store";
+import { notify } from "./toast";
 
 export const CSS = `
 .meq-overlay { position: fixed; inset: 0; z-index: 9999; background: rgba(0,0,0,.6); backdrop-filter: blur(8px); display: flex; align-items: center; justify-content: center; }
@@ -339,7 +340,7 @@ export function openPanel(): void {
         nameInput.value = "";
         rebuildPresetSelect();
         refreshDel();
-        Spicetify.showNotification?.(`Preset "${name}" saved`);
+        notify(`Preset "${name}" saved`);
     };
 
     (overlay.querySelector(".meq-reset") as HTMLButtonElement).onclick = () => {
